@@ -1,4 +1,4 @@
-module github.com/AlexanderYastrebov/onion-vanity-address
+module github.com/xannythepleb/onion-vanity-address
 
 go 1.25.0
 
