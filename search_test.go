@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"filippo.io/edwards25519"
-	"github.com/AlexanderYastrebov/onion-vanity-address/internal/assert"
-	"github.com/AlexanderYastrebov/onion-vanity-address/internal/require"
+	"github.com/xannythepleb/onion-vanity-address/internal/assert"
+	"github.com/xannythepleb/onion-vanity-address/internal/require"
 )
 
 func TestSearch(t *testing.T) {

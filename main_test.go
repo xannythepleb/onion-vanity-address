@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AlexanderYastrebov/onion-vanity-address/internal/assert"
-	"github.com/AlexanderYastrebov/onion-vanity-address/internal/require"
+	"github.com/xannythepleb/onion-vanity-address/internal/assert"
+	"github.com/xannythepleb/onion-vanity-address/internal/require"
 )
 
 func TestFixture(t *testing.T) {

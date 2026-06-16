@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/AlexanderYastrebov/onion-vanity-address/internal/assert"
+	"github.com/xannythepleb/onion-vanity-address/internal/assert"
 )
 
 func TestDecodePrefixBits(t *testing.T) {
