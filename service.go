@@ -103,15 +103,24 @@ func serializeServicePublicKey(publicKey []byte) []byte {
 	return buf
 }
 
-func encodeServiceSecretKey(publicKey []byte) string {
-	return base64.StdEncoding.EncodeToString(serializeServiceSecretKey(publicKey))
+func encodeServiceSecretKey(secretKey []byte) string {
+	return base64.StdEncoding.EncodeToString(serializeServiceSecretKey(secretKey))
+}
+
+func encodeStart9ServiceSecretKey(secretKey []byte) string {
+	return base64.StdEncoding.EncodeToString(expandServiceSecretKey(secretKey))
 }
 
 // serializeServiceSecretKey returns the content of hs_ed25519_secret_key file.
 func serializeServiceSecretKey(secretKey []byte) []byte {
-	buf := make([]byte, 0, 96)
+	buf := make([]byte, 0, secretKeyFileLength)
 	buf = append(buf, secretKeyFilePrefix...)
+	buf = append(buf, expandServiceSecretKey(secretKey)...)
+	return buf
+}
 
+// expandServiceSecretKey returns the 64-byte expanded private key stored after Tor's hs_ed25519_secret_key header.
+func expandServiceSecretKey(secretKey []byte) []byte {
 	// From https://gitlab.torproject.org/tpo/core/tor/-/blob/main/src/lib/crypt_ops/crypto_ed25519.h#L27
 	//
 	//  * Note that we store secret keys in an expanded format that doesn't match
@@ -128,6 +137,5 @@ func serializeServiceSecretKey(secretKey []byte) []byte {
 	hs[0] &= 248
 	hs[31] &= 63
 	hs[31] |= 64
-	buf = append(buf, hs[:]...)
-	return buf
+	return hs[:]
 }

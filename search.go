@@ -28,6 +28,10 @@ var _B8 = new(edwards25519.Point).MultByCofactor(edwards25519.NewGeneratorPoint(
 // The search continues until context is done and returns number of generated candidates.
 // The function panics if batchSize is not positive and even, or if startPublicKey is not a valid edwards25519 public key.
 func search(ctx context.Context, startPublicKey []byte, startOffset *big.Int, batchSize int, accept func(candidatePublicKey []byte) bool, yield func(publicKey []byte, offset *big.Int)) uint64 {
+	return searchWithProgress(ctx, startPublicKey, startOffset, batchSize, accept, nil, yield)
+}
+
+func searchWithProgress(ctx context.Context, startPublicKey []byte, startOffset *big.Int, batchSize int, accept func(candidatePublicKey []byte) bool, progress func(attempts uint64), yield func(publicKey []byte, offset *big.Int)) uint64 {
 	if startOffset == nil || startOffset.Sign() == -1 {
 		panic("startOffset must be non-negative")
 	}
@@ -75,10 +79,11 @@ func search(ctx context.Context, startPublicKey []byte, startOffset *big.Int, ba
 	// as well as the center point p.
 	//
 	// Complexity: (5M + 2A)*batchSize + 278M + 9A
+	attempts := uint64(0)
 	for i := uint64(batchSize / 2); ; i += uint64(batchSize + 1) {
 		select {
 		case <-ctx.Done():
-			return i - uint64(batchSize/2)
+			return attempts
 		default:
 		}
 
@@ -140,6 +145,12 @@ func search(ctx context.Context, startPublicKey []byte, startOffset *big.Int, ba
 		if accept(yb[:]) {
 			offset := new(big.Int).Add(startOffset, new(big.Int).SetUint64(i))
 			yield(slices.Clone(yb[:]), offset)
+		}
+
+		batchAttempts := uint64(batchSize + 1)
+		attempts += batchAttempts
+		if progress != nil {
+			progress(batchAttempts)
 		}
 
 		// Complexity: 3M

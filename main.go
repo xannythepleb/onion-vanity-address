@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,77 +21,85 @@ import (
 )
 
 const usage = `Usage:
-    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] PREFIX [PREFIX]...
+    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] PREFIX [PREFIX]...
+    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] PREFIX [PREFIX]...
     onion-vanity-address [--client] --offset OFFSET
+    onion-vanity-address [--start9] --offset OFFSET
 
 Options:
     --client                Search for a Client Authorization keypair instead of an Onion Service keypair.
+    --count COUNT           Stop after finding COUNT matching keys. Defaults to 3.
     --from PUBLIC_KEY       Start search from the given public key.
     --offset OFFSET         Add an offset to the secret keys read from standard input.
+    --start9                Write Onion Service secret keys as Start9 StartOS-compatible 88-character base64 files.
     --timeout TIMEOUT       Stop after the specified timeout (e.g., 10s, 5m, 1h).
 
-onion-vanity-address generates a new Onion Service ed25519 keypair with an onion address having one of the specified PREFIXes,
-and outputs it to standard output in base64-encoded YAML format.
+onion-vanity-address generates Onion Service ed25519 keypairs with onion addresses having one of the specified PREFIXes.
+By default it writes each matching Onion Service keypair to a directory named after the hostname. Each directory contains:
 
-In --client mode, onion-vanity-address generates a Client Authorization keypair with public key having one of the specified PREFIXes.
+    hostname
+    hs_ed25519_public_key
+    hs_ed25519_secret_key
 
-PREFIX must use base32 character set "` + onionBase32EncodingCharset + `" for Onion Servic keypair
-and "` + clientBase32EncodingCharset + `" for Client Authorization keypair.
+With --start9, it writes one file per hostname. The file is named after the hostname and contains the 88-character
+base64-encoded expanded secret key expected by Start9 StartOS's Tor plugin UI.
 
-In --from mode, onion-vanity-address starts the search from a specified public key and
-outputs the offset to the public key with the desired prefix.
+In --client mode, onion-vanity-address generates Client Authorization keypairs with public keys having one of the specified PREFIXes.
+Client keypairs are still printed to standard output.
+
+PREFIX must use base32 character set "` + onionBase32EncodingCharset + `" for Onion Service keypairs
+and "` + clientBase32EncodingCharset + `" for Client Authorization keypairs.
+
+In --from mode, onion-vanity-address starts the search from a specified public key and outputs matching offsets.
 The offset can be added to the corresponding secret key to derive the new keypair.
 
-In --offset mode, onion-vanity-address reads the secret key from standard input,
-adds the specified offset to it, and outputs the resulting keypair.
+In --offset mode, onion-vanity-address reads the secret key from standard input, adds the specified offset,
+and writes the resulting Onion Service keypair in the selected output format.
 
 Service examples:
 
-    # Generate a new service keypair with address having the specified prefix
-    $ onion-vanity-address allium
-    Found allium... in 12s after 558986486 attempts (48529996 attempts/s)
-    ---
-    hostname: alliumdye3it7ko4cuftoni4rlrupuobvio24ypz55qpzjzpvuetzhyd.onion
-    hs_ed25519_public_key: PT0gZWQyNTUxOXYxLXB1YmxpYzogdHlwZTAgPT0AAAAC1ooweCbRP6ncFQs3NRyK40fRwaodrmH572D8py+tCQ==
-    hs_ed25519_secret_key: PT0gZWQyNTUxOXYxLXNlY3JldDogdHlwZTAgPT0AAAAQEW4Rhot7oroPaETlAEG3GPAntvJ1agF2c7A2AXmBW3WqAH0oUZ1hySvvZl3hc9dSAIc49h1UuCPZacOWp4vQ
+    # Generate three new service keypairs with addresses having any of the specified prefixes
+    $ onion-vanity-address test t3st testaddr
+    Searching test,t3st,testaddr | elapsed 10s | tried 564.0M | 56.4M attempts/s | found 1/3 | remaining 2
+    Found test... testabc...onion (1/3) after 12s and 676.8M attempts (56.4M attempts/s)
+    Wrote Tor service files to testabc...onion/
+
+    # Generate one Start9-compatible key
+    $ onion-vanity-address --start9 --count 1 test
+    Found test... testxyz...onion (1/1) after 5s and 282.0M attempts (56.4M attempts/s)
+    Wrote Start9 key to testxyz...onion
 
     # Find prefix offset from the specified public key
     $ onion-vanity-address --from PT0gZWQyNTUxOXYxLXB1YmxpYzogdHlwZTAgPT0AAAAC1ooweCbRP6ncFQs3NRyK40fRwaodrmH572D8py+tCQ== cebula
-    Found cebula... in 2s after 78457550 attempts (44982483 attempts/s)
+    Found cebula... cebulasfa3b4ahol44ydvc2an6b4vgpjcguarwsj35dr6jbanveea4id.onion (1/3) after 2s and 78.5M attempts (44.9M attempts/s)
     ---
     hostname: cebulasfa3b4ahol44ydvc2an6b4vgpjcguarwsj35dr6jbanveea4id.onion
     offset: cIZ5Birj/cY=
 
-    # Apply offset to the secret key
+    # Apply offset to the secret key and write Tor service files
     $ echo PT0gZWQyNTUxOXYxLXNlY3JldDogdHlwZTAgPT0AAAAQEW4Rhot7oroPaETlAEG3GPAntvJ1agF2c7A2AXmBW3WqAH0oUZ1hySvvZl3hc9dSAIc49h1UuCPZacOWp4vQ \
     | onion-vanity-address --offset cIZ5Birj/cY=
-    ---
-    hostname: cebulasfa3b4ahol44ydvc2an6b4vgpjcguarwsj35dr6jbanxenrcqd.onion
-    hs_ed25519_public_key: PT0gZWQyNTUxOXYxLXB1YmxpYzogdHlwZTAgPT0AAAARA0WCRQbDwB3L5zA6i0Bvg8qZ6RGoCNpJ30cfJCBtyA==
-    hs_ed25519_secret_key: PT0gZWQyNTUxOXYxLXNlY3JldDogdHlwZTAgPT0AAABA/41ot1OvJr4PaETlAEG3GPAntvJ1agF2c7A2AXmBW/BnbLk2LgY3abEydc7heS5rhKByW/nafTlwifcgL0zO
+    Wrote Tor service files to cebulasfa3b4ahol44ydvc2an6b4vgpjcguarwsj35dr6jbanxenrcqd.onion/
 
 Client examples:
 
-    # Generate a new client authorization keypair with the specified prefix
-    $ onion-vanity-address --client LEMON
-    Found LEMON... in 0s after 14990923 attempts (63626192 attempts/s)
+    # Generate client authorization keypairs with the specified prefix
+    $ onion-vanity-address --client --count 1 LEMON
+    Found LEMON... in 0s after 15.0M attempts (63.6M attempts/s)
     ---
     public_key: LEMON7P5L7FEZZEJJGQTC3PDFRHEOOBP3H2XXHRFQSD72OKKEE5Q
     private_key: AAADDFICRR46KLA52KV2QRIN6GUWIPEIVZZZUVZLC5UVE53QNMTA
-
-    # Find prefix offset from the specified public key
-    $ onion-vanity-address --client --from LEMON7P5L7FEZZEJJGQTC3PDFRHEOOBP3H2XXHRFQSD72OKKEE5Q TOMATO
-    Found TOMATO... in 16s after 1071246687 attempts (65052983 attempts/s)
-    ---
-    public_key: TOMATOWHTLC3ERVBD2D6V5DENSWPBAHYUKJNYNUALO3CJB2C2BZQ
-    offset: 0mtckGJcwbs=
-
-    # Apply offset to the private key
-    $ echo AAADDFICRR46KLA52KV2QRIN6GUWIPEIVZZZUVZLC5UVE53QNMTA | onion-vanity-address --client --offset 0mtckGJcwbs=
-    ---
-    public_key: TOMATOWHTLC3ERVBD2D6V5DENSWPBAHYUKJNYNUALO3CJB2C2BZQ
-    private_key: FDZEVAT7U4PFEJQ52KV2QRIN6GUWIPEIVZZZUVZLC5UVE53QNMTA
 `
+
+type searchOptions struct {
+	count  int
+	start9 bool
+}
+
+type foundKey struct {
+	publicKey []byte
+	offset    *big.Int
+}
 
 func must[T any](v T, err error) T {
 	if err != nil {
@@ -113,13 +122,23 @@ func main() {
 	var fromFlag string
 	var offsetFlag string
 	var timeoutFlag time.Duration
+	var countFlag int
+	var start9Flag bool
 
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	flag.BoolVar(&clientFlag, "client", false, "search for a Client Authorization keypair instead of an Onion Service keypair")
+	flag.IntVar(&countFlag, "count", 3, "stop after finding this many matching keys")
 	flag.StringVar(&fromFlag, "from", "", "public key to start search from")
 	flag.StringVar(&offsetFlag, "offset", "", "offset to add to the secret key read from stdin")
+	flag.BoolVar(&start9Flag, "start9", false, "write Start9 StartOS-compatible 88-character base64 secret key files")
 	flag.DurationVar(&timeoutFlag, "timeout", 0, "stop after specified timeout")
 	flag.Parse()
+
+	check(countFlag > 0, "--count must be greater than zero")
+	check(!(clientFlag && start9Flag), "--start9 can only be used with Onion Service keypairs")
+	check(!(fromFlag != "" && start9Flag), "--start9 can not be used with --from because --from only outputs offsets")
+
+	opts := searchOptions{count: countFlag, start9: start9Flag}
 
 	if offsetFlag != "" {
 		check(fromFlag == "", "--from can not be used with --offset")
@@ -131,7 +150,7 @@ func main() {
 		if clientFlag {
 			offsetClientKey(offset)
 		} else {
-			offsetServiceKey(offset)
+			offsetServiceKey(offset, opts)
 		}
 		return
 	}
@@ -147,9 +166,9 @@ func main() {
 	}
 
 	if clientFlag {
-		searchClientKey(ctx, flag.Args(), fromFlag)
+		searchClientKey(ctx, flag.Args(), fromFlag, opts)
 	} else {
-		searchServiceKey(ctx, flag.Args(), fromFlag)
+		searchServiceKey(ctx, flag.Args(), fromFlag, opts)
 	}
 }
 
@@ -163,33 +182,37 @@ func offsetClientKey(offset *big.Int) {
 	fmt.Printf("private_key: %s\n", clientBase32Encoding.EncodeToString(vanitySecretKey))
 }
 
-func offsetServiceKey(offset *big.Int) {
+func offsetServiceKey(offset *big.Int, opts searchOptions) {
 	startSecretKey := must(readServiceSecretKey(os.Stdin))
 	vanitySecretKey := must(add(startSecretKey, offset))
 	vanityPublicKey := must(publicKeyFor(vanitySecretKey))
+	address := encodeOnionAddress(vanityPublicKey)
 
-	fmt.Println("---")
-	fmt.Printf("%s: %s\n", hostnameFileName, encodeOnionAddress(vanityPublicKey))
-	fmt.Printf("%s: %s\n", publicKeyFileName, encodeServicePublicKey(vanityPublicKey))
-	fmt.Printf("%s: %s\n", secretKeyFileName, encodeServiceSecretKey(vanitySecretKey))
+	path := must(writeServiceKey(address, vanityPublicKey, vanitySecretKey, opts.start9))
+	printOutputPath(path, opts.start9)
 }
 
-func searchClientKey(ctx context.Context, prefixes []string, from string) {
-	var startSecretKey, startPublicKey []byte
-	if from != "" {
-		startPublicKey = must(decodeClientPublicKey(from))
-	} else {
-		startSecretKey = make([]byte, 32)
-		rand.Read(startSecretKey)
+func searchClientKey(ctx context.Context, prefixes []string, from string, opts searchOptions) {
+	for i := 1; i <= opts.count; i++ {
+		var startSecretKey, startPublicKey []byte
+		if from != "" {
+			startPublicKey = must(decodeClientPublicKey(from))
+		} else {
+			startSecretKey = make([]byte, 32)
+			must(rand.Read(startSecretKey))
+			startPublicKey = must(clientPublicKeyFor(startSecretKey))
+		}
 
-		startPublicKey = must(clientPublicKeyFor(startSecretKey))
-	}
+		start := time.Now()
+		found, vanityPublicKey, attempts := parallel(vanity25519.Search, ctx, startPublicKey, must(matchAnyOf(prefixes, clientMatch)))
+		elapsed := time.Since(start)
 
-	start := time.Now()
-	found, vanityPublicKey, attempts := parallel(vanity25519.Search, ctx, startPublicKey, must(matchAnyOf(prefixes, clientMatch)))
-	elapsed := time.Since(start)
+		if found == nil {
+			fmt.Fprintf(os.Stderr, "Stopped searching %v... after %s and %s attempts (%s attempts/s)\n",
+				prefixes, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
+			os.Exit(2)
+		}
 
-	if found != nil {
 		var vanitySecretKey []byte
 		if len(startSecretKey) > 0 {
 			vanitySecretKey = must(vanity25519.Add(startSecretKey, found))
@@ -199,8 +222,8 @@ func searchClientKey(ctx context.Context, prefixes []string, from string) {
 		vanityPublicKeyEncoded := clientBase32Encoding.EncodeToString(vanityPublicKey)
 		prefix := longestMatching(prefixes, vanityPublicKeyEncoded)
 
-		fmt.Fprintf(os.Stderr, "Found %s... in %s after %d attempts (%.0f attempts/s)\n",
-			prefix, elapsed.Round(time.Second), attempts, float64(attempts)/elapsed.Seconds())
+		fmt.Fprintf(os.Stderr, "Found %s... (%d/%d) in %s after %s attempts (%s attempts/s)\n",
+			prefix, i, opts.count, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
 
 		fmt.Println("---")
 		fmt.Printf("public_key: %s\n", vanityPublicKeyEncoded)
@@ -209,54 +232,159 @@ func searchClientKey(ctx context.Context, prefixes []string, from string) {
 		} else {
 			fmt.Printf("offset: %s\n", base64.StdEncoding.EncodeToString(found.Bytes()))
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Stopped searching %v... after %s and %d attempts (%.0f attempts/s)\n",
-			prefixes, elapsed.Round(time.Second), attempts, float64(attempts)/elapsed.Seconds())
-		os.Exit(2)
 	}
 }
 
-func searchServiceKey(ctx context.Context, prefixes []string, from string) {
+func searchServiceKey(ctx context.Context, prefixes []string, from string, opts searchOptions) {
 	var startSecretKey, startPublicKey []byte
 	if from != "" {
 		startPublicKey = must(decodeServicePublicKey(from))
 	} else {
 		startSecretKey = make([]byte, 32)
-		rand.Read(startSecretKey)
-
+		must(rand.Read(startSecretKey))
 		startPublicKey = must(publicKeyFor(startSecretKey))
 	}
 
 	start := time.Now()
-	found, vanityPublicKey, attempts := parallel(search, ctx, startPublicKey, must(matchAnyOf(prefixes, addressMatch)))
-	elapsed := time.Since(start)
+	var attemptsTotal atomic.Uint64
+	var foundTotal atomic.Int64
 
-	if found != nil {
-		var vanitySecretKey []byte
-		if len(startSecretKey) > 0 {
-			vanitySecretKey = must(add(startSecretKey, found))
-			vanityPublicKey = must(publicKeyFor(vanitySecretKey))
-		}
+	progressCtx, stopProgress := context.WithCancel(context.Background())
+	defer stopProgress()
+	go reportProgress(progressCtx, start, &attemptsTotal, &foundTotal, opts.count, prefixes)
 
-		address := encodeOnionAddress(vanityPublicKey)
+	results, attempts := parallelService(ctx, startPublicKey, must(matchAnyOf(prefixes, addressMatch)), opts.count, &attemptsTotal, func(index int, publicKey []byte, offset *big.Int) {
+		foundTotal.Store(int64(index))
+		address := encodeOnionAddress(publicKey)
 		prefix := longestMatching(prefixes, address)
+		elapsed := time.Since(start)
 
-		fmt.Fprintf(os.Stderr, "Found %s... in %s after %d attempts (%.0f attempts/s)\n",
-			prefix, elapsed.Round(time.Second), attempts, float64(attempts)/elapsed.Seconds())
+		clearProgressLine()
+		fmt.Fprintf(os.Stderr, "Found %s... %s (%d/%d) after %s and %s attempts (%s attempts/s)\n",
+			prefix, address, index, opts.count, elapsed.Round(time.Second), formatCompactUint(attemptsTotal.Load()), formatCompactRate(attemptsTotal.Load(), elapsed))
+	})
 
-		fmt.Println("---")
-		fmt.Printf("%s: %s\n", hostnameFileName, address)
-		if len(vanitySecretKey) > 0 {
-			fmt.Printf("%s: %s\n", publicKeyFileName, encodeServicePublicKey(vanityPublicKey))
-			fmt.Printf("%s: %s\n", secretKeyFileName, encodeServiceSecretKey(vanitySecretKey))
-		} else {
-			fmt.Printf("offset: %s\n", base64.StdEncoding.EncodeToString(found.Bytes()))
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Stopped searching %v... after %s and %d attempts (%.0f attempts/s)\n",
-			prefixes, elapsed.Round(time.Second), attempts, float64(attempts)/elapsed.Seconds())
+	stopProgress()
+	clearProgressLine()
+
+	if len(results) == 0 {
+		elapsed := time.Since(start)
+		fmt.Fprintf(os.Stderr, "Stopped searching %v... after %s and %s attempts (%s attempts/s)\n",
+			prefixes, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
 		os.Exit(2)
 	}
+
+	for _, result := range results {
+		if len(startSecretKey) == 0 {
+			address := encodeOnionAddress(result.publicKey)
+			fmt.Println("---")
+			fmt.Printf("%s: %s\n", hostnameFileName, address)
+			fmt.Printf("offset: %s\n", base64.StdEncoding.EncodeToString(result.offset.Bytes()))
+			continue
+		}
+
+		vanitySecretKey := must(add(startSecretKey, result.offset))
+		vanityPublicKey := must(publicKeyFor(vanitySecretKey))
+		address := encodeOnionAddress(vanityPublicKey)
+		path := must(writeServiceKey(address, vanityPublicKey, vanitySecretKey, opts.start9))
+		printOutputPath(path, opts.start9)
+	}
+
+	if len(results) < opts.count {
+		elapsed := time.Since(start)
+		fmt.Fprintf(os.Stderr, "Stopped after finding %d/%d keys in %s and %s attempts (%s attempts/s)\n",
+			len(results), opts.count, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
+	}
+}
+
+func writeServiceKey(address string, publicKey, secretKey []byte, start9 bool) (string, error) {
+	if start9 {
+		path := filepath.Clean(address)
+		if err := os.WriteFile(path, []byte(encodeStart9ServiceSecretKey(secretKey)), 0o600); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+
+	dir := filepath.Clean(address)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, hostnameFileName), []byte(address+"\n"), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, publicKeyFileName), serializeServicePublicKey(publicKey), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, secretKeyFileName), serializeServiceSecretKey(secretKey), 0o600); err != nil {
+		return "", err
+	}
+	return dir + string(os.PathSeparator), nil
+}
+
+func printOutputPath(path string, start9 bool) {
+	if start9 {
+		fmt.Fprintf(os.Stderr, "Wrote Start9 key to %s\n", path)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Wrote Tor service files to %s\n", path)
+}
+
+func reportProgress(ctx context.Context, start time.Time, attempts *atomic.Uint64, found *atomic.Int64, target int, prefixes []string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	render := func() {
+		elapsed := time.Since(start).Round(time.Second)
+		foundCount := int(found.Load())
+		remaining := target - foundCount
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		fmt.Fprintf(os.Stderr, "\r\033[KSearching %s | elapsed %s | tried %s | %s attempts/s | found %d/%d | remaining %d",
+			strings.Join(prefixes, ","), elapsed, formatCompactUint(attempts.Load()), formatCompactRate(attempts.Load(), time.Since(start)), foundCount, target, remaining)
+	}
+
+	render()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			render()
+		}
+	}
+}
+
+func clearProgressLine() {
+	fmt.Fprint(os.Stderr, "\r\033[K")
+}
+
+func formatCompactRate(attempts uint64, elapsed time.Duration) string {
+	seconds := elapsed.Seconds()
+	if seconds <= 0 {
+		return "0"
+	}
+	return formatCompactFloat(float64(attempts) / seconds)
+}
+
+func formatCompactUint(n uint64) string {
+	return formatCompactFloat(float64(n))
+}
+
+func formatCompactFloat(n float64) string {
+	units := []string{"", "K", "M", "B", "T", "P", "E"}
+	unit := 0
+	for n >= 1000 && unit < len(units)-1 {
+		n /= 1000
+		unit++
+	}
+
+	if unit == 0 {
+		return fmt.Sprintf("%.0f", n)
+	}
+	return fmt.Sprintf("%.1f%s", n, units[unit])
 }
 
 func clientMatch(prefix string) (func([]byte) bool, error) {
@@ -295,7 +423,9 @@ func parallel(search searchFunc, ctx context.Context, startPublicKey []byte, tes
 	var attemptsTotal atomic.Uint64
 	var wg sync.WaitGroup
 	for range runtime.GOMAXPROCS(0) {
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			startOffset, _ := rand.Int(rand.Reader, new(big.Int).SetUint64(1<<64-1))
 			attempts := search(ctx, startPublicKey, startOffset, 4096, test, func(pk []byte, offset *big.Int) {
 				if result.CompareAndSwap(nil, offset) {
@@ -304,9 +434,53 @@ func parallel(search searchFunc, ctx context.Context, startPublicKey []byte, tes
 				}
 			})
 			attemptsTotal.Add(attempts)
-		})
+		}()
 	}
 	wg.Wait()
 
 	return result.Load(), vanityPublicKey, attemptsTotal.Load()
+}
+
+func parallelService(ctx context.Context, startPublicKey []byte, test func([]byte) bool, target int, attemptsTotal *atomic.Uint64, onFound func(index int, publicKey []byte, offset *big.Int)) ([]foundKey, uint64) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var mu sync.Mutex
+	var results []foundKey
+	var wg sync.WaitGroup
+
+	for range runtime.GOMAXPROCS(0) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			startOffset, _ := rand.Int(rand.Reader, new(big.Int).SetUint64(1<<64-1))
+			searchWithProgress(ctx, startPublicKey, startOffset, 4096, test, func(delta uint64) {
+				attemptsTotal.Add(delta)
+			}, func(pk []byte, offset *big.Int) {
+				pkCopy := append([]byte(nil), pk...)
+				offsetCopy := new(big.Int).Set(offset)
+
+				mu.Lock()
+				if len(results) >= target {
+					mu.Unlock()
+					return
+				}
+
+				results = append(results, foundKey{publicKey: pkCopy, offset: offsetCopy})
+				index := len(results)
+				if index >= target {
+					cancel()
+				}
+				mu.Unlock()
+
+				if onFound != nil {
+					onFound(index, pkCopy, offsetCopy)
+				}
+			})
+		}()
+	}
+
+	wg.Wait()
+	return results, attemptsTotal.Load()
 }
