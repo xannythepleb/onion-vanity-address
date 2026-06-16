@@ -21,10 +21,10 @@ This fork adds several practical improvements for generating and managing multip
   * `hostname`
   * `hs_ed25519_public_key`
   * `hs_ed25519_secret_key`
-* Use `--start9` to output the private key in the Start9 StartOS Tor plugin format.
+* Use `--start9` to output the private key in the Start9 StartOS Tor plugin format (base64 encoded).
 * Start9 output writes one file per generated hostname.
 * Each Start9 output file is named after the hostname and contains only the 88-character base64-encoded expanded secret key.
-* The live search status now updates in-place in the terminal instead of printing a new line for every update.
+* The live search status now updates in-place in the terminal instead of showing no progress during the process.
 * The progress report shows:
 
   * elapsed search time
