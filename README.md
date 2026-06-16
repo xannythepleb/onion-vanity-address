@@ -128,14 +128,14 @@ Wrote Start9 key to testaddrabc...onion
 Or use the Docker image:
 
 ```sh
-docker pull ghcr.io/alexanderyastrebov/onion-vanity-address:latest
-docker run ghcr.io/alexanderyastrebov/onion-vanity-address:latest --count 1 allium
+docker pull ghcr.io/xannythepleb/onion-vanity-address:latest
+docker run ghcr.io/xannythepleb/onion-vanity-address:latest --count 1 allium
 ```
 
 With Start9 output:
 
 ```sh
-docker run ghcr.io/alexanderyastrebov/onion-vanity-address:latest --start9 --count 1 allium
+docker run ghcr.io/xannythepleb/onion-vanity-address:latest --start9 --count 1 allium
 ```
 
 ### Multiple prefixes
