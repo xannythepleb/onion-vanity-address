@@ -21,6 +21,9 @@ func stringMatcher(patterns []string, mode matchMode, validate func(string) erro
 	if len(patterns) == 0 {
 		return nil, fmt.Errorf("at least one pattern required")
 	}
+	if mode == matchBoth && len(patterns) != 2 {
+		return nil, fmt.Errorf("--both requires exactly two patterns: PREFIX SUFFIX")
+	}
 	for _, pattern := range patterns {
 		if err := validate(pattern); err != nil {
 			return nil, err
@@ -34,7 +37,7 @@ func stringMatcher(patterns []string, mode matchMode, validate func(string) erro
 		case matchSuffix:
 			return hasAnySuffix(value, patterns)
 		case matchBoth:
-			return hasAnyPrefix(value, patterns) && hasAnySuffix(value, patterns)
+			return strings.HasPrefix(value, patterns[0]) && strings.HasSuffix(value, patterns[1])
 		default:
 			panic("unknown match mode")
 		}
@@ -77,7 +80,10 @@ func matchDescription(patterns []string, value string, mode matchMode) string {
 	case matchSuffix:
 		return "..." + longestMatchingSuffix(patterns, value)
 	case matchBoth:
-		return longestMatchingPrefix(patterns, value) + "..." + longestMatchingSuffix(patterns, value)
+		if len(patterns) != 2 {
+			panic("--both requires exactly two patterns")
+		}
+		return longestMatchingPrefix(patterns[:1], value) + "..." + longestMatchingSuffix(patterns[1:], value)
 	default:
 		panic("unknown match mode")
 	}
@@ -91,7 +97,10 @@ func formatSearchPatterns(patterns []string, mode matchMode) string {
 	case matchSuffix:
 		return "suffix " + joined
 	case matchBoth:
-		return "prefix+suffix " + joined
+		if len(patterns) != 2 {
+			panic("--both requires exactly two patterns")
+		}
+		return fmt.Sprintf("prefix %s + suffix %s", patterns[0], patterns[1])
 	default:
 		panic("unknown match mode")
 	}

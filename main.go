@@ -21,13 +21,17 @@ import (
 )
 
 const usage = `Usage:
-    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] [--suffix | --both] PATTERN [PATTERN]...
-    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] [--suffix | --both] PATTERN [PATTERN]...
+    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] PATTERN [PATTERN]...
+    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] --suffix SUFFIX [SUFFIX]...
+    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] --both PREFIX SUFFIX
+    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] PATTERN [PATTERN]...
+    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] --suffix SUFFIX [SUFFIX]...
+    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] --both PREFIX SUFFIX
     onion-vanity-address [--client] --offset OFFSET
     onion-vanity-address [--start9] --offset OFFSET
 
 Options:
-    --both                  Search for addresses/keys matching both a prefix and suffix from the supplied patterns.
+    --both                  Search for addresses/keys matching the supplied PREFIX and SUFFIX.
     --client                Search for a Client Authorization keypair instead of an Onion Service keypair.
     --count COUNT           Stop after finding COUNT matching keys. Defaults to 3.
     --from PUBLIC_KEY       Start search from the given public key.
@@ -50,7 +54,7 @@ In --client mode, onion-vanity-address generates Client Authorization keypairs w
 Client keypairs are still printed to standard output.
 
 By default, PATTERNs are matched as prefixes. With --suffix, they are matched as suffixes.
-With --both, a result must start with any supplied PATTERN and end with any supplied PATTERN.
+With --both, exactly two positional arguments are required: PREFIX and SUFFIX.
 Suffix matching for Onion Service addresses checks the address body before the .onion suffix.
 
 PATTERN must use base32 character set "` + onionBase32EncodingCharset + `" for Onion Service keypairs
@@ -82,8 +86,8 @@ Service examples:
     Wrote Tor service files to abcxyz...test.onion/
 
     # Search for both a prefix and suffix. This is much slower than searching only one side.
-    $ onion-vanity-address --both --count 1 test
-    Warning: --both requires each result to match both a prefix and suffix. This can take much longer than searching only one side.
+    $ onion-vanity-address --both --count 1 test pleb
+    Warning: --both requires each result to match the supplied prefix and suffix. This can take much longer than searching only one side.
 
     # Find prefix offset from the specified public key
     $ onion-vanity-address --from PT0gZWQyNTUxOXYxLXB1YmxpYzogdHlwZTAgPT0AAAAC1ooweCbRP6ncFQs3NRyK40fRwaodrmH572D8py+tCQ== cebula
@@ -145,7 +149,7 @@ func main() {
 	var bothFlag bool
 
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	flag.BoolVar(&bothFlag, "both", false, "search for keys matching both a prefix and suffix from the supplied patterns")
+	flag.BoolVar(&bothFlag, "both", false, "search for keys matching the supplied prefix and suffix")
 	flag.BoolVar(&clientFlag, "client", false, "search for a Client Authorization keypair instead of an Onion Service keypair")
 	flag.IntVar(&countFlag, "count", 3, "stop after finding this many matching keys")
 	flag.StringVar(&fromFlag, "from", "", "public key to start search from")
@@ -186,13 +190,17 @@ func main() {
 		return
 	}
 
-	check(flag.NArg() > 0, "PATTERN required")
+	if opts.mode == matchBoth {
+		check(flag.NArg() == 2, "--both requires exactly two patterns: PREFIX SUFFIX")
+	} else {
+		check(flag.NArg() > 0, "PATTERN required")
+	}
 
 	if opts.mode == matchSuffix {
 		fmt.Fprintln(os.Stderr, "Warning: suffix matching is slower because each candidate must be fully encoded before it can be checked.")
 	}
 	if opts.mode == matchBoth {
-		fmt.Fprintln(os.Stderr, "Warning: --both requires each result to match both a prefix and suffix. This can take much longer than searching only one side.")
+		fmt.Fprintln(os.Stderr, "Warning: --both requires each result to match the supplied prefix and suffix. This can take much longer than searching only one side.")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

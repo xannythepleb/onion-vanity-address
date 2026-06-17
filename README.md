@@ -180,12 +180,12 @@ Wrote Tor service files to abcxyz...pleb.onion/
 
 Suffix matching checks the address body before `.onion`, so `--suffix pleb` looks for `...pleb.onion`, not an address literally ending in `pleb` after the `.onion` TLD.
 
-Use `--both` when the same pattern list should be used for both sides. A match must start with any supplied pattern and end with any supplied pattern:
+Use `--both` to search for addresses that start with one pattern and end with another. It takes exactly two positional arguments: the prefix first, then the suffix:
 
 ```console
-$ onion-vanity-address --both --count 1 pleb
-Warning: --both requires each result to match both a prefix and suffix. This can take much longer than searching only one side.
-Searching prefix+suffix pleb | elapsed 10s | tried 120.0M | 12.0M attempts/s | found 0/1 | remaining 1
+$ onion-vanity-address --both --count 1 pleb sats
+Warning: --both requires each result to match the supplied prefix and suffix. This can take much longer than searching only one side.
+Searching prefix pleb + suffix sats | elapsed 10s | tried 120.0M | 12.0M attempts/s | found 0/1 | remaining 1
 ```
 
 `--both` is much harder than prefix-only or suffix-only matching because the probability is roughly multiplied by both pattern lengths. For example, a four-character prefix plus a four-character suffix is broadly comparable to searching for an eight-character vanity constraint.
