@@ -53,3 +53,51 @@ func TestDecodePrefixBits(t *testing.T) {
 		})
 	}
 }
+
+func TestStringMatcherModes(t *testing.T) {
+	validate := func(string) error { return nil }
+
+	prefix, err := stringMatcher([]string{"abc", "def"}, matchPrefix, validate)
+	assert.NoError(t, err)
+	assert.True(t, prefix("abcdef"))
+	assert.False(t, prefix("xyzdef"))
+
+	suffix, err := stringMatcher([]string{"abc", "def"}, matchSuffix, validate)
+	assert.NoError(t, err)
+	assert.True(t, suffix("xyzdef"))
+	assert.False(t, suffix("defxyz"))
+
+	both, err := stringMatcher([]string{"abc", "def"}, matchBoth, validate)
+	assert.NoError(t, err)
+	assert.True(t, both("abcdef"))
+	assert.False(t, both("abcxyz"))
+}
+
+func TestMatchDescription(t *testing.T) {
+	patterns := []string{"ab", "abc", "yz"}
+
+	assert.Equal(t, "abc...", matchDescription(patterns, "abcdef", matchPrefix))
+	assert.Equal(t, "...yz", matchDescription(patterns, "wxyz", matchSuffix))
+	assert.Equal(t, "abc...yz", matchDescription(patterns, "abcxyz", matchBoth))
+}
+
+func TestAddressSuffixMatcherChecksBothSignBits(t *testing.T) {
+	unsignedPublicKey := make([]byte, 32)
+	signedPublicKey := append([]byte(nil), unsignedPublicKey...)
+	signedPublicKey[31] |= 0x80
+
+	unsignedBody := onionAddressBody(encodeOnionAddress(unsignedPublicKey))
+	signedBody := onionAddressBody(encodeOnionAddress(signedPublicKey))
+	assert.False(t, unsignedBody == signedBody)
+
+	suffix := signedBody[len(signedBody)-8:]
+
+	candidateMatch, err := addressMatcher([]string{suffix}, matchSuffix)
+	assert.NoError(t, err)
+	assert.True(t, candidateMatch(unsignedPublicKey))
+
+	exactMatch, err := exactAddressMatcher([]string{suffix}, matchSuffix)
+	assert.NoError(t, err)
+	assert.False(t, exactMatch(unsignedPublicKey))
+	assert.True(t, exactMatch(signedPublicKey))
+}

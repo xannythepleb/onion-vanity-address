@@ -24,6 +24,7 @@ This fork adds several practical improvements for generating and managing multip
 * Use `--start9` to output the private key in the Start9 StartOS Tor plugin format (base64 encoded).
 * Start9 output writes one file per generated hostname.
 * Each Start9 output file is named after the hostname and contains only the 88-character base64-encoded expanded secret key.
+* Allows optional suffix and combined searches (roughly 2x slower than prefix searches, [see below](#suffix-and-combined-searches)).
 * The live search status now updates in-place in the terminal instead of showing no progress during the process.
 * The progress report shows:
 
@@ -164,6 +165,30 @@ Wrote Tor service files to zwiebeldef...onion/
 It will output the first three onion addresses that start with any of the specified prefixes.
 
 When searching for multiple prefixes of varying lengths, shorter prefixes will appear more often.
+
+### Suffix and combined searches
+
+Use `--suffix` to search for addresses ending with one of the supplied patterns instead of starting with them:
+
+```console
+$ onion-vanity-address --suffix --count 1 pleb
+Warning: suffix matching is slower because each candidate must be fully encoded before it can be checked.
+Searching suffix pleb | elapsed 10s | tried 120.0M | 12.0M attempts/s | found 0/1 | remaining 1
+Found ...pleb abcxyz...pleb.onion (1/1) after 1m12s and 864.0M attempts (12.0M attempts/s)
+Wrote Tor service files to abcxyz...pleb.onion/
+```
+
+Suffix matching checks the address body before `.onion`, so `--suffix pleb` looks for `...pleb.onion`, not an address literally ending in `pleb` after the `.onion` TLD.
+
+Use `--both` when the same pattern list should be used for both sides. A match must start with any supplied pattern and end with any supplied pattern:
+
+```console
+$ onion-vanity-address --both --count 1 pleb
+Warning: --both requires each result to match both a prefix and suffix. This can take much longer than searching only one side.
+Searching prefix+suffix pleb | elapsed 10s | tried 120.0M | 12.0M attempts/s | found 0/1 | remaining 1
+```
+
+`--both` is much harder than prefix-only or suffix-only matching because the probability is roughly multiplied by both pattern lengths. For example, a four-character prefix plus a four-character suffix is broadly comparable to searching for an eight-character vanity constraint.
 
 Use `--count` to change this behaviour:
 

@@ -21,20 +21,22 @@ import (
 )
 
 const usage = `Usage:
-    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] PREFIX [PREFIX]...
-    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] PREFIX [PREFIX]...
+    onion-vanity-address [--client] [--from PUBLIC_KEY] [--timeout TIMEOUT] [--count COUNT] [--suffix | --both] PATTERN [PATTERN]...
+    onion-vanity-address [--start9] [--timeout TIMEOUT] [--count COUNT] [--suffix | --both] PATTERN [PATTERN]...
     onion-vanity-address [--client] --offset OFFSET
     onion-vanity-address [--start9] --offset OFFSET
 
 Options:
+    --both                  Search for addresses/keys matching both a prefix and suffix from the supplied patterns.
     --client                Search for a Client Authorization keypair instead of an Onion Service keypair.
     --count COUNT           Stop after finding COUNT matching keys. Defaults to 3.
     --from PUBLIC_KEY       Start search from the given public key.
     --offset OFFSET         Add an offset to the secret keys read from standard input.
     --start9                Write Onion Service secret keys as Start9 StartOS-compatible 88-character base64 files.
+    --suffix                Search for suffixes instead of prefixes.
     --timeout TIMEOUT       Stop after the specified timeout (e.g., 10s, 5m, 1h).
 
-onion-vanity-address generates Onion Service ed25519 keypairs with onion addresses having one of the specified PREFIXes.
+onion-vanity-address generates Onion Service ed25519 keypairs with onion addresses matching one of the specified PATTERNs.
 By default it writes each matching Onion Service keypair to a directory named after the hostname. Each directory contains:
 
     hostname
@@ -44,10 +46,14 @@ By default it writes each matching Onion Service keypair to a directory named af
 With --start9, it writes one file per hostname. The file is named after the hostname and contains the 88-character
 base64-encoded expanded secret key expected by Start9 StartOS's Tor plugin UI.
 
-In --client mode, onion-vanity-address generates Client Authorization keypairs with public keys having one of the specified PREFIXes.
+In --client mode, onion-vanity-address generates Client Authorization keypairs with public keys matching one of the specified PATTERNs.
 Client keypairs are still printed to standard output.
 
-PREFIX must use base32 character set "` + onionBase32EncodingCharset + `" for Onion Service keypairs
+By default, PATTERNs are matched as prefixes. With --suffix, they are matched as suffixes.
+With --both, a result must start with any supplied PATTERN and end with any supplied PATTERN.
+Suffix matching for Onion Service addresses checks the address body before the .onion suffix.
+
+PATTERN must use base32 character set "` + onionBase32EncodingCharset + `" for Onion Service keypairs
 and "` + clientBase32EncodingCharset + `" for Client Authorization keypairs.
 
 In --from mode, onion-vanity-address starts the search from a specified public key and outputs matching offsets.
@@ -68,6 +74,16 @@ Service examples:
     $ onion-vanity-address --start9 --count 1 test
     Found test... testxyz...onion (1/1) after 5s and 282.0M attempts (56.4M attempts/s)
     Wrote Start9 key to testxyz...onion
+
+    # Search for a suffix instead of a prefix
+    $ onion-vanity-address --suffix --count 1 test
+    Warning: suffix matching is slower because each candidate must be fully encoded before it can be checked.
+    Found ...test abcxyz...test.onion (1/1) after 2m and 5.6B attempts (46.7M attempts/s)
+    Wrote Tor service files to abcxyz...test.onion/
+
+    # Search for both a prefix and suffix. This is much slower than searching only one side.
+    $ onion-vanity-address --both --count 1 test
+    Warning: --both requires each result to match both a prefix and suffix. This can take much longer than searching only one side.
 
     # Find prefix offset from the specified public key
     $ onion-vanity-address --from PT0gZWQyNTUxOXYxLXB1YmxpYzogdHlwZTAgPT0AAAAC1ooweCbRP6ncFQs3NRyK40fRwaodrmH572D8py+tCQ== cebula
@@ -94,6 +110,7 @@ Client examples:
 type searchOptions struct {
 	count  int
 	start9 bool
+	mode   matchMode
 }
 
 type foundKey struct {
@@ -124,26 +141,40 @@ func main() {
 	var timeoutFlag time.Duration
 	var countFlag int
 	var start9Flag bool
+	var suffixFlag bool
+	var bothFlag bool
 
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	flag.BoolVar(&bothFlag, "both", false, "search for keys matching both a prefix and suffix from the supplied patterns")
 	flag.BoolVar(&clientFlag, "client", false, "search for a Client Authorization keypair instead of an Onion Service keypair")
 	flag.IntVar(&countFlag, "count", 3, "stop after finding this many matching keys")
 	flag.StringVar(&fromFlag, "from", "", "public key to start search from")
 	flag.StringVar(&offsetFlag, "offset", "", "offset to add to the secret key read from stdin")
 	flag.BoolVar(&start9Flag, "start9", false, "write Start9 StartOS-compatible 88-character base64 secret key files")
+	flag.BoolVar(&suffixFlag, "suffix", false, "search for suffixes instead of prefixes")
 	flag.DurationVar(&timeoutFlag, "timeout", 0, "stop after specified timeout")
 	flag.Parse()
 
 	check(countFlag > 0, "--count must be greater than zero")
 	check(!(clientFlag && start9Flag), "--start9 can only be used with Onion Service keypairs")
 	check(!(fromFlag != "" && start9Flag), "--start9 can not be used with --from because --from only outputs offsets")
+	check(!(suffixFlag && bothFlag), "--suffix and --both can not be used together")
 
-	opts := searchOptions{count: countFlag, start9: start9Flag}
+	mode := matchPrefix
+	if suffixFlag {
+		mode = matchSuffix
+	}
+	if bothFlag {
+		mode = matchBoth
+	}
+
+	opts := searchOptions{count: countFlag, start9: start9Flag, mode: mode}
 
 	if offsetFlag != "" {
 		check(fromFlag == "", "--from can not be used with --offset")
 		check(timeoutFlag == 0, "--timeout can not be used with --offset")
-		check(flag.NArg() == 0, "PREFIX can not be used with --offset")
+		check(mode == matchPrefix, "--suffix and --both can not be used with --offset")
+		check(flag.NArg() == 0, "PATTERN can not be used with --offset")
 
 		offset := new(big.Int).SetBytes(must(base64.StdEncoding.DecodeString(offsetFlag)))
 
@@ -155,7 +186,14 @@ func main() {
 		return
 	}
 
-	check(flag.NArg() > 0, "PREFIX required")
+	check(flag.NArg() > 0, "PATTERN required")
+
+	if opts.mode == matchSuffix {
+		fmt.Fprintln(os.Stderr, "Warning: suffix matching is slower because each candidate must be fully encoded before it can be checked.")
+	}
+	if opts.mode == matchBoth {
+		fmt.Fprintln(os.Stderr, "Warning: --both requires each result to match both a prefix and suffix. This can take much longer than searching only one side.")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -204,12 +242,12 @@ func searchClientKey(ctx context.Context, prefixes []string, from string, opts s
 		}
 
 		start := time.Now()
-		found, vanityPublicKey, attempts := parallel(vanity25519.Search, ctx, startPublicKey, must(matchAnyOf(prefixes, clientMatch)))
+		found, vanityPublicKey, attempts := parallel(vanity25519.Search, ctx, startPublicKey, must(clientMatcher(prefixes, opts.mode)))
 		elapsed := time.Since(start)
 
 		if found == nil {
-			fmt.Fprintf(os.Stderr, "Stopped searching %v... after %s and %s attempts (%s attempts/s)\n",
-				prefixes, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
+			fmt.Fprintf(os.Stderr, "Stopped searching %s after %s and %s attempts (%s attempts/s)\n",
+				formatSearchPatterns(prefixes, opts.mode), elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
 			os.Exit(2)
 		}
 
@@ -220,10 +258,10 @@ func searchClientKey(ctx context.Context, prefixes []string, from string, opts s
 		}
 
 		vanityPublicKeyEncoded := clientBase32Encoding.EncodeToString(vanityPublicKey)
-		prefix := longestMatching(prefixes, vanityPublicKeyEncoded)
+		match := matchDescription(prefixes, vanityPublicKeyEncoded, opts.mode)
 
-		fmt.Fprintf(os.Stderr, "Found %s... (%d/%d) in %s after %s attempts (%s attempts/s)\n",
-			prefix, i, opts.count, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
+		fmt.Fprintf(os.Stderr, "Found %s (%d/%d) in %s after %s attempts (%s attempts/s)\n",
+			match, i, opts.count, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
 
 		fmt.Println("---")
 		fmt.Printf("public_key: %s\n", vanityPublicKeyEncoded)
@@ -251,17 +289,26 @@ func searchServiceKey(ctx context.Context, prefixes []string, from string, opts 
 
 	progressCtx, stopProgress := context.WithCancel(context.Background())
 	defer stopProgress()
-	go reportProgress(progressCtx, start, &attemptsTotal, &foundTotal, opts.count, prefixes)
+	go reportProgress(progressCtx, start, &attemptsTotal, &foundTotal, opts.count, prefixes, opts.mode)
 
-	results, attempts := parallelService(ctx, startPublicKey, must(matchAnyOf(prefixes, addressMatch)), opts.count, &attemptsTotal, func(index int, publicKey []byte, offset *big.Int) {
+	var verifyFound func(publicKey []byte, offset *big.Int) ([]byte, bool)
+	if opts.mode != matchPrefix {
+		exactMatch := must(exactAddressMatcher(prefixes, opts.mode))
+		verifyFound = func(_ []byte, offset *big.Int) ([]byte, bool) {
+			exactPublicKey := must(publicKeyForOffset(startPublicKey, offset))
+			return exactPublicKey, exactMatch(exactPublicKey)
+		}
+	}
+
+	results, attempts := parallelService(ctx, startPublicKey, must(addressMatcher(prefixes, opts.mode)), verifyFound, opts.count, &attemptsTotal, func(index int, publicKey []byte, offset *big.Int) {
 		foundTotal.Store(int64(index))
 		address := encodeOnionAddress(publicKey)
-		prefix := longestMatching(prefixes, address)
+		match := matchDescription(prefixes, onionAddressBody(address), opts.mode)
 		elapsed := time.Since(start)
 
 		clearProgressLine()
-		fmt.Fprintf(os.Stderr, "Found %s... %s (%d/%d) after %s and %s attempts (%s attempts/s)\n",
-			prefix, address, index, opts.count, elapsed.Round(time.Second), formatCompactUint(attemptsTotal.Load()), formatCompactRate(attemptsTotal.Load(), elapsed))
+		fmt.Fprintf(os.Stderr, "Found %s %s (%d/%d) after %s and %s attempts (%s attempts/s)\n",
+			match, address, index, opts.count, elapsed.Round(time.Second), formatCompactUint(attemptsTotal.Load()), formatCompactRate(attemptsTotal.Load(), elapsed))
 	})
 
 	stopProgress()
@@ -269,8 +316,8 @@ func searchServiceKey(ctx context.Context, prefixes []string, from string, opts 
 
 	if len(results) == 0 {
 		elapsed := time.Since(start)
-		fmt.Fprintf(os.Stderr, "Stopped searching %v... after %s and %s attempts (%s attempts/s)\n",
-			prefixes, elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
+		fmt.Fprintf(os.Stderr, "Stopped searching %s after %s and %s attempts (%s attempts/s)\n",
+			formatSearchPatterns(prefixes, opts.mode), elapsed.Round(time.Second), formatCompactUint(attempts), formatCompactRate(attempts, elapsed))
 		os.Exit(2)
 	}
 
@@ -330,7 +377,7 @@ func printOutputPath(path string, start9 bool) {
 	fmt.Fprintf(os.Stderr, "Wrote Tor service files to %s\n", path)
 }
 
-func reportProgress(ctx context.Context, start time.Time, attempts *atomic.Uint64, found *atomic.Int64, target int, prefixes []string) {
+func reportProgress(ctx context.Context, start time.Time, attempts *atomic.Uint64, found *atomic.Int64, target int, patterns []string, mode matchMode) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -343,7 +390,7 @@ func reportProgress(ctx context.Context, start time.Time, attempts *atomic.Uint6
 		}
 
 		fmt.Fprintf(os.Stderr, "\r\033[KSearching %s | elapsed %s | tried %s | %s attempts/s | found %d/%d | remaining %d",
-			strings.Join(prefixes, ","), elapsed, formatCompactUint(attempts.Load()), formatCompactRate(attempts.Load(), time.Since(start)), foundCount, target, remaining)
+			formatSearchPatterns(patterns, mode), elapsed, formatCompactUint(attempts.Load()), formatCompactRate(attempts.Load(), time.Since(start)), foundCount, target, remaining)
 	}
 
 	render()
@@ -387,28 +434,85 @@ func formatCompactFloat(n float64) string {
 	return fmt.Sprintf("%.1f%s", n, units[unit])
 }
 
-func clientMatch(prefix string) (func([]byte) bool, error) {
-	if len(prefix) == 0 {
-		return nil, fmt.Errorf("empty prefix")
+func clientMatcher(patterns []string, mode matchMode) (func([]byte) bool, error) {
+	if mode == matchPrefix {
+		return matchAnyOf(patterns, clientPrefixMatch)
 	}
 
-	if strings.TrimLeft(prefix, clientBase32EncodingCharset) != "" {
-		return nil, fmt.Errorf("client public key prefix must use characters %q", clientBase32EncodingCharset)
+	return encodedMatcher(patterns, mode, validateClientPattern, func(publicKey []byte) string {
+		return clientBase32Encoding.EncodeToString(publicKey)
+	})
+}
+
+func addressMatcher(patterns []string, mode matchMode) (func([]byte) bool, error) {
+	if mode == matchPrefix {
+		return matchAnyOf(patterns, addressPrefixMatch)
 	}
 
+	match, err := stringMatcher(patterns, mode, validateAddressPattern)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(publicKey []byte) bool {
+		candidate := append([]byte(nil), publicKey...)
+		candidate[31] &^= 0x80
+		if match(onionAddressBody(encodeOnionAddress(candidate))) {
+			return true
+		}
+
+		candidate[31] |= 0x80
+		return match(onionAddressBody(encodeOnionAddress(candidate)))
+	}, nil
+}
+
+func exactAddressMatcher(patterns []string, mode matchMode) (func([]byte) bool, error) {
+	match, err := stringMatcher(patterns, mode, validateAddressPattern)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(publicKey []byte) bool {
+		return match(onionAddressBody(encodeOnionAddress(publicKey)))
+	}, nil
+}
+
+func clientPrefixMatch(prefix string) (func([]byte) bool, error) {
+	if err := validateClientPattern(prefix); err != nil {
+		return nil, err
+	}
 	return hasPrefix(prefix, clientBase32Encoding)
 }
 
-func addressMatch(prefix string) (func([]byte) bool, error) {
-	if len(prefix) == 0 {
-		return nil, fmt.Errorf("empty prefix")
+func addressPrefixMatch(prefix string) (func([]byte) bool, error) {
+	if err := validateAddressPattern(prefix); err != nil {
+		return nil, err
 	}
-
-	if strings.TrimLeft(prefix, onionBase32EncodingCharset) != "" {
-		return nil, fmt.Errorf("address prefix must use characters %q", onionBase32EncodingCharset)
-	}
-
 	return hasPrefix(prefix, onionBase32Encoding)
+}
+
+func validateClientPattern(pattern string) error {
+	if len(pattern) == 0 {
+		return fmt.Errorf("empty pattern")
+	}
+
+	if strings.TrimLeft(pattern, clientBase32EncodingCharset) != "" {
+		return fmt.Errorf("client public key pattern must use characters %q", clientBase32EncodingCharset)
+	}
+
+	return nil
+}
+
+func validateAddressPattern(pattern string) error {
+	if len(pattern) == 0 {
+		return fmt.Errorf("empty pattern")
+	}
+
+	if strings.TrimLeft(pattern, onionBase32EncodingCharset) != "" {
+		return fmt.Errorf("address pattern must use characters %q", onionBase32EncodingCharset)
+	}
+
+	return nil
 }
 
 type searchFunc func(ctx context.Context, startPublicKey []byte, startOffset *big.Int, batchSize int, accept func(candidatePublicKey []byte) bool, yield func(publicKey []byte, offset *big.Int)) uint64
@@ -441,7 +545,7 @@ func parallel(search searchFunc, ctx context.Context, startPublicKey []byte, tes
 	return result.Load(), vanityPublicKey, attemptsTotal.Load()
 }
 
-func parallelService(ctx context.Context, startPublicKey []byte, test func([]byte) bool, target int, attemptsTotal *atomic.Uint64, onFound func(index int, publicKey []byte, offset *big.Int)) ([]foundKey, uint64) {
+func parallelService(ctx context.Context, startPublicKey []byte, test func([]byte) bool, verify func(publicKey []byte, offset *big.Int) ([]byte, bool), target int, attemptsTotal *atomic.Uint64, onFound func(index int, publicKey []byte, offset *big.Int)) ([]foundKey, uint64) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -460,6 +564,21 @@ func parallelService(ctx context.Context, startPublicKey []byte, test func([]byt
 			}, func(pk []byte, offset *big.Int) {
 				pkCopy := append([]byte(nil), pk...)
 				offsetCopy := new(big.Int).Set(offset)
+
+				mu.Lock()
+				if len(results) >= target {
+					mu.Unlock()
+					return
+				}
+				mu.Unlock()
+
+				if verify != nil {
+					var ok bool
+					pkCopy, ok = verify(pkCopy, offsetCopy)
+					if !ok {
+						return
+					}
+				}
 
 				mu.Lock()
 				if len(results) >= target {
