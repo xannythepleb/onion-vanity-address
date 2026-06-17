@@ -85,6 +85,10 @@ func TestSearch(t *testing.T) {
 					pkb, err := publicKeyFor(kb)
 					assert.NoError(t, err)
 
+					exactPublicKey, err := publicKeyForOffset(pk, offset)
+					assert.NoError(t, err)
+					assert.Equal(t, pkb, exactPublicKey)
+
 					// Check ignoring sign bit
 					pkb[31] &= 0x7f
 					assert.Equal(t, pkb, xb)

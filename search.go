@@ -158,6 +158,17 @@ func searchWithProgress(ctx context.Context, startPublicKey []byte, startOffset 
 	}
 }
 
+func publicKeyForOffset(startPublicKey []byte, offset *big.Int) ([]byte, error) {
+	p, err := new(edwards25519.Point).SetBytes(startPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	po := new(edwards25519.Point).ScalarMult(scalarFromBigInt(offset), _B8)
+	p.Add(p, po)
+	return p.Bytes(), nil
+}
+
 // add returns edwards25519 private key obtained by adding offset found by [search] function to the start private key.
 func add(startPrivateKey []byte, offset *big.Int) ([]byte, error) {
 	s, err := new(field.Element).SetBytes(startPrivateKey)
